@@ -38,6 +38,9 @@ Schedule Trigger (Mon 9AM)
 
 ---
 
+## Demo
+https://drive.google.com/file/d/1gfIZBW1KxxkMefLME2T6_YTkbzIp2Xxj/view?usp=sharing
+
 ## Design decisions
 
 ### Parallel fetch, not sequential
