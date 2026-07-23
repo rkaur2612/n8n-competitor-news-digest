@@ -85,7 +85,7 @@ The prompt requests strict JSON with a defined schema rather than free-form summ
 
 Temperature is set to **0.3**: this is summarization, not creative writing. The same input should produce substantially the same digest, and the model should stay anchored to source text.
 
-### Recipient address is a placeholder in the committed workflow; it is a per-deployment value.
+**Recipient address is a placeholder in the committed workflow; it is a per-deployment value.**
 
 ---
 
