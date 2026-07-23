@@ -1,0 +1,283 @@
+{
+  "name": "Competitor News Monitor — Weekly Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -32,
+        64
+      ],
+      "id": "3603b29e-d1ac-48c0-9818-6d1bc9f57f2b",
+      "name": "Weekly Trigger — Mon 9AM"
+    },
+    {
+      "parameters": {
+        "url": "https://zapier.com/blog/feeds/latest/",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        160,
+        -32
+      ],
+      "id": "f0ca7f6f-259a-4e7e-bf35-9da2245b8570",
+      "name": "Fetch Zapier Blog RSS",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://blog.n8n.io/rss",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        160,
+        144
+      ],
+      "id": "fde647de-6141-45e2-8916-5face47e2c12",
+      "name": "Fetch n8n Blog RSS",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        384,
+        48
+      ],
+      "id": "b9d193cb-95f1-4e8e-9634-3042429d4e75",
+      "name": "Merge Feeds"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- CONFIG (single source of truth) ----\nconst DAYS_WINDOW     = 7;   // must match the Schedule Trigger cadence\nconst PER_SOURCE_CAP  = 6;   // max articles per feed — prevents source starvation\n\n// Identify a feed's source from its XML so articles stay attributable\nfunction detectSource(xml) {\n  if (xml.includes('zapier.com')) return 'Zapier Blog';\n  if (xml.includes('blog.n8n.io')) return 'n8n Blog';\n  return 'Unknown Source';\n}\n\n// Strip CDATA wrappers, HTML tags, and decode common entities\nfunction clean(str) {\n  if (!str) return '';\n  return str\n    .replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/g, '$1')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"').replace(/&apos;/g, \"'\").replace(/&#x27;/g, \"'\")\n    .replace(/&#x2014;/g, '—').replace(/&#xA0;|&nbsp;/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\n// Pull the first matching tag out of an <item> block\nfunction tag(block, name) {\n  const m = block.match(new RegExp(`<${name}[^>]*>([\\\\s\\\\S]*?)</${name}>`, 'i'));\n  return m ? clean(m[1]) : '';\n}\n\nconst cutoff = new Date(Date.now() - DAYS_WINDOW * 24 * 60 * 60 * 1000);\nconst articles = [];\n\nfor (const item of $input.all()) {\n  const xml = item.json.data;\n  if (typeof xml !== 'string' || !xml.includes('<item')) continue; // skip failed/empty feeds\n\n  const source = detectSource(xml);\n  const blocks = xml.match(/<item[\\s\\S]*?<\\/item>/g) || [];\n\n  for (const block of blocks) {\n    const pubDate = tag(block, 'pubDate');\n    const published = new Date(pubDate);\n    if (isNaN(published) || published < cutoff) continue;  // 7-day window\n\n    articles.push({\n      source,\n      title: tag(block, 'title'),\n      link: tag(block, 'link'),\n      // truncate: RSS descriptions vary wildly in length; cap token spend\n      summary: tag(block, 'description').slice(0, 400),\n      published: published.toISOString(),\n      publishedReadable: published.toUTCString().slice(0, 16),\n    });\n  }\n}\n\n// Dedupe by link (same story can appear in both feeds)\nconst seen = new Set();\nconst unique = articles.filter(a => {\n  if (!a.link || seen.has(a.link)) return false;\n  seen.add(a.link);\n  return true;\n});\n\n// Newest first\nunique.sort((a, b) => new Date(b.published) - new Date(a.published));\n\n// Fair allocation: cap PER SOURCE so a high-volume feed can't crowd out a quieter one\nconst bySource = {};\nconst finalList = [];\nfor (const a of unique) {\n  bySource[a.source] = (bySource[a.source] || 0) + 1;\n  if (bySource[a.source] <= PER_SOURCE_CAP) finalList.push(a);\n}\nfinalList.sort((a, b) => new Date(b.published) - new Date(a.published));\n\n// Build one combined text blob for the AI node\nconst combinedText = finalList\n  .map((a, i) => `${i + 1}. [${a.source}] ${a.title}\\n   Published: ${a.publishedReadable}\\n   ${a.summary}\\n   URL: ${a.link}`)\n  .join('\\n\\n');\n\nreturn [{\n  json: {\n    articleCount: finalList.length,\n    sourcesFound: [...new Set(finalList.map(a => a.source))],\n    perSourceCounts: bySource,\n    windowDays: DAYS_WINDOW,\n    articles: finalList,\n    combinedText: combinedText || 'No new articles were published in the last 7 days.',\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        48
+      ],
+      "id": "14146694-8fe6-4856-a0a7-4c59b4aa0b2e",
+      "name": "Parse, Filter & Dedupe"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a competitive intelligence analyst for a workflow automation company. Below are articles published in the last {{ $json.windowDays }} days by competitors and industry sources.\n\nProduce 3-5 key takeaways for a weekly digest.\n\nRULES:\n1. Every takeaway MUST be grounded in a specific article below. Do not introduce outside knowledge or speculate about industry trends not present in this data.\n2. Prioritize competitively significant items: product launches, strategic positioning, pricing, partnerships, acquisitions, AI/agent capabilities, competitor comparisons. DEPROIORITIZE generic SEO content (app roundups, unrelated software reviews) unless it signals a strategic shift.\n3. Note when a competitor is directly positioning against another company.\n4. Be specific. \"Zapier published about AI agents\" is useless. \"Zapier is pushing deterministic automation over agents to control token costs\" is useful.\n5. \"sources_covered\" must list ONLY sources that appear in your takeaways. Do not list a source you did not cite.\n6. If a source published articles but NONE were competitively significant, include one brief takeaway noting what they published and that it was low-signal. Do not create low-signal takeaways for sources that already have a substantive takeaway.\n\nReturn ONLY valid JSON matching this schema. No markdown fences, no preamble:\n\n{\n  \"headline\": \"one sentence summarizing the week's most important signal\",\n  \"takeaways\": [\n    {\n      \"title\": \"short punchy title (max 10 words)\",\n      \"insight\": \"2-3 sentences explaining what happened and why it matters competitively\",\n      \"source\": \"the source name\",\n      \"url\": \"the article URL\"\n    }\n  ],\n  \"sources_covered\": [\"list of source names\"]\n}\n\nARTICLES:\n{{ $json.combinedText }}",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        736,
+        48
+      ],
+      "id": "15ea3173-1ff8-4048-a050-3cf5da38dd51",
+      "name": "AI Summarize"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "llama-3.3-70b-versatile",
+          "mode": "list",
+          "cachedResultName": "llama-3.3-70b-versatile"
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        736,
+        256
+      ],
+      "id": "7eaacfd7-ed82-42a4-86fc-e2fbe53bb6b3",
+      "name": "Groq (OpenAI-compatible)",
+      "credentials": {
+        "openAiApi": {
+          "id": "oWYApS4VBqbphHbw",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- INPUT ----\n// The LLM node returns a JSON *string* in .text — parse it defensively.\nconst raw = $input.first().json.text || '';\n\n// Pull upstream stats so the digest can report on its own coverage\nconst parsed = $('Parse, Filter & Dedupe').first().json;\n\nlet ai;\ntry {\n  // Strip markdown fences if the model wrapped the JSON despite instructions\n  const cleaned = raw.replace(/```json\\s*/gi, '').replace(/```/g, '').trim();\n  ai = JSON.parse(cleaned);\n} catch (e) {\n  ai = null;\n}\n\n// ---- FALLBACK: if the AI output is unusable, still ship something ----\nif (!ai || !Array.isArray(ai.takeaways) || ai.takeaways.length === 0) {\n  const fallback = [\n    `# Competitor News Digest`,\n    `**Week ending ${new Date().toUTCString().slice(0, 16)}**`,\n    ``,\n    `> The AI summarization step did not return usable output this week.`,\n    `> Raw article list is included below so the digest is still actionable.`,\n    ``,\n    `## Articles Found (${parsed.articleCount})`,\n    ...parsed.articles.map(a => `- **[${a.source}]** [${a.title}](${a.link}) — _${a.publishedReadable}_`),\n  ].join('\\n');\n\n  return [{\n    json: {\n      subject: `[Degraded] Competitor Digest — ${new Date().toUTCString().slice(0, 16)}`,\n      digestMarkdown: fallback,\n      status: 'ai_failed',\n    },\n  }];\n}\n\n// ---- VALIDATION: never trust the model for anything we can compute ----\n// Rebuild sources_covered from the takeaways themselves.\nconst citedSources = [...new Set(ai.takeaways.map(t => t.source).filter(Boolean))];\n\n// Which sources had articles but got no takeaway? Report the gap honestly.\nconst allSources = Object.keys(parsed.perSourceCounts || {});\nconst uncovered = allSources.filter(s => !citedSources.includes(s));\n\n// ---- BUILD MARKDOWN ----\nconst weekEnding = new Date().toUTCString().slice(0, 16);\nconst lines = [];\n\nlines.push(`# Competitor News Digest`);\nlines.push(`**Week ending ${weekEnding}**`);\nlines.push('');\n\nif (ai.headline) {\n  lines.push(`### ${ai.headline}`);\n  lines.push('');\n}\n\nlines.push(`## Key Takeaways`);\nlines.push('');\n\nai.takeaways.forEach((t, i) => {\n  lines.push(`**${i + 1}. ${t.title}**`);\n  lines.push('');\n  lines.push(t.insight);\n  if (t.url) lines.push(`[Read more](${t.url}) · _${t.source}_`);\n  lines.push('');\n});\n\n// ---- COVERAGE FOOTER: transparency about what was scanned ----\nlines.push(`---`);\nlines.push(`## Coverage`);\nlines.push('');\nlines.push(`Scanned **${allSources.length}** sources over the last **${parsed.windowDays}** days.`);\nlines.push('');\nObject.entries(parsed.perSourceCounts || {}).forEach(([src, count]) => {\n  const flag = citedSources.includes(src) ? '' : ' _(no significant news)_';\n  lines.push(`- **${src}**: ${count} article${count === 1 ? '' : 's'} published${flag}`);\n});\nlines.push('');\nlines.push(`_${parsed.articleCount} articles analyzed. Generated automatically by n8n._`);\n\nconst digestMarkdown = lines.join('\\n');\n\nreturn [{\n  json: {\n    subject: `Competitor Digest — ${weekEnding}`,\n    digestMarkdown,\n    takeawayCount: ai.takeaways.length,\n    sourcesCovered: citedSources,   // computed, not model-reported\n    sourcesUncovered: uncovered,\n    status: 'ok',\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        48
+      ],
+      "id": "e1a1bdc3-8dcb-4e87-9c9c-1489ad12b19c",
+      "name": "Format Digest"
+    },
+    {
+      "parameters": {
+        "sendTo": "recipient@example.com",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.digestMarkdown }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        256
+      ],
+      "id": "87b92939-d47d-4979-8354-a328af4a948b",
+      "name": "Send Digest (Gmail)",
+      "webhookId": "0c85bb03-147a-480e-9c26-3188e658a9da",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "SLN931OLeRwZNQGI",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Weekly Trigger — Mon 9AM": {
+      "main": [
+        [
+          {
+            "node": "Fetch n8n Blog RSS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Zapier Blog RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch n8n Blog RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge Feeds",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Fetch Zapier Blog RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge Feeds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Feeds": {
+      "main": [
+        [
+          {
+            "node": "Parse, Filter & Dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse, Filter & Dedupe": {
+      "main": [
+        [
+          {
+            "node": "AI Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq (OpenAI-compatible)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Summarize",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Summarize": {
+      "main": [
+        [
+          {
+            "node": "Format Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Digest": {
+      "main": [
+        [
+          {
+            "node": "Send Digest (Gmail)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "a11f6948-2097-4b07-abe0-8c0bbe268e67",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "408a10b2b73e47fedec1f817288a0e0d4f9148ba80cd8d91c35083be2014f715"
+  },
+  "nodeGroups": [],
+  "id": "kXNRCn9N2UH3mXz8",
+  "tags": []
+}
